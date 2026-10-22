@@ -92,7 +92,9 @@ GROUP BY 1, 2 ORDER BY 2, 1;
 
 A scheduled Claude task would do the following on each run:
 1. Search Gmail (Composio, account `witchawat.bb@gmail.com`) for
-   `subject:"Green Nut Daily Sales & Stock" has:attachment newer_than:2d`.
+   `from:loxtrade.com subject:"Green Nut Daily" has:attachment newer_than:3d`.
+   The subject varies ("Sales & Stock" / "Sales&Stock") and the attachment
+   name sometimes has no date, so don't match on either.
 2. Skip message ids already in `ingest_log.email_message_id`.
 3. Download the `.xlsx` attachment and run
    `python loxley_sales_parser.py ingest <file> --message-id <id> --subject "<subject>"`.
