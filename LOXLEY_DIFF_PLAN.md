@@ -1,4 +1,8 @@
-# Plan: incremental ("diff") daily loader
+# Incremental ("diff") daily loader: analysis, design, results
+
+**Status: built.** Sections 1–2 are the analysis behind it. Section 3 is the
+design as implemented in `loxley_sales_parser.py`. Section 6 has the
+measured results.
 
 Goal: tomorrow's email should load only what changed. Today the script
 re-reads the whole 2 MB workbook and upserts about 2,300 rows for each email.
@@ -62,8 +66,8 @@ Timing per daily file (current script): about 4.5 s, of which:
 1. **Open only what is needed.** Use `openpyxl` read-only mode and stream just:
    * the current month sheet;
    * the previous month sheet, only while it can still change: the report date
-     is within the first 5 days of the month, **or** the DB's last snapshot
-     for that month is earlier than the month's last working day;
+     is within the first 7 days of the month, **or** the DB has no data for
+     that month yet (`--months-back N` overrides);
    * `DATA_ไซส์` (33 rows, cheap).
    * Skip `DATA_Cocode` unless `--refresh-reference` is set, or it's the first
      run of a month.
@@ -129,3 +133,31 @@ Synthetic workbooks reproducing each observed case:
 
 Plus the regression check used here: sequential daily loads must equal a
 single full load of the last file, apart from status history.
+
+## 6. Results (built and verified)
+
+All on the real files, on both SQLite and PostgreSQL (identical output):
+
+| check | result |
+|---|---|
+| 15 Oct backfill + 19, 20, 21, 22 Oct daily vs a single full load of 22 Oct | sales, stock, PO, products, customers **identical** (the stale moved-PO row is gone) |
+| 30 Sep backfill + 1 Oct + 15–22 Oct vs a single full load of 22 Oct | **identical** |
+| doubled `28 Sep.` label in the 30 Sep file | dated 29 Sep from the time-gone row; the 1 Oct file then confirms it |
+| 1 Oct file | read `Sep.26` and `Oct.26` automatically; added 30 Sep and 1 Oct; logged 3 revisions Loxley made to 29 Sep (e.g. 35 g shrimp 2,359.07 → 2,347.07) |
+| 19 Oct file | 32 sales + 29 stock + 7 PO rows inserted, 1 PO delete logged (the moved PO) |
+| monthly totals, all 38 months | unchanged versus the previous version |
+| time per daily file | 0.6–0.8 s (was 4.5 s) |
+| rows written per daily file | 93–101 (was about 2,300 upserts) |
+| same message id again / older file / forced older file | skipped / skipped / no data after its report date lost |
+| database from the previous version | migrates in place (adds `ingest_log.warnings` and `change_log`) |
+
+The full-history backfill also surfaced four historical duplicate date labels.
+Each was checked by hand:
+* Aug 2026: a second `19 Aug.` is really 20 Aug (from the time-gone row).
+* Jul 2025 and Dec 2025 (stock): the duplicate columns hold identical values.
+* Dec 2024: a second `17 Dec.` has no time-gone value, so it is skipped,
+  losing one intermediate snapshot. The month total is unaffected.
+
+Tests: `tests/test_incremental.py` covers each scenario in section 5, plus
+mass-delete protection, the quality warnings, skipping the customer master
+mid-month, and `--help`. 31 tests in total.

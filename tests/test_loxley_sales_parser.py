@@ -163,7 +163,7 @@ def test_reingest_is_skipped_and_force_is_idempotent(loaded):
     xlsx, db_path, con = loaded
     before = con.execute("SELECT COUNT(*) FROM fact_sales_mtd").fetchone()[0]
     db = L.DB(f"sqlite:///{db_path}")
-    assert L.ingest_file(db, xlsx, False, 1, None, None, force=False)["skipped"] is True
-    L.ingest_file(db, xlsx, False, 1, "msg123", "subj", force=True)
+    assert L.ingest_file(db, xlsx)["skipped"] == "already ingested"
+    L.ingest_file(db, xlsx, message_id="msg123", subject="subj", force=True)
     assert con.execute("SELECT COUNT(*) FROM fact_sales_mtd").fetchone()[0] == before
     assert con.execute("SELECT email_message_id, report_date FROM ingest_log").fetchone() == ("msg123", "2026-10-05")

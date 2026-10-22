@@ -57,11 +57,39 @@ with `--db postgresql://…` or the `LOXLEY_DB_URL` environment variable.
 | `fact_sku_status` | SKU × report date | forecast, PO plan, outstanding, cover days, demand, promotion text, notes; one row per email, so the history is kept |
 | `dim_product` | SKU | description, size (g), price point, retailers, first/last seen |
 | `dim_customer` | Loxley customer | channel group (from `DATA_Cocode`) |
-| `ingest_log` | file | SHA-256, report date, Gmail message id, subject |
+| `change_log` | revision | every update or delete of a value already loaded (old → new, which file) |
+| `ingest_log` | file | SHA-256, report date, Gmail message id, subject, data-quality warnings |
 
-Loads are idempotent. Every table is upserted on its natural key, the same
-file is never loaded twice (use `--force` to reload it), and the newest report
-wins when values overlap.
+### How loading works
+
+Loads are incremental. Loxley only ever changes the current month sheet, by
+inserting one "Actual" and one "Available Stock" column per day (see
+`LOXLEY_DIFF_PLAN.md` for the analysis). A daily run:
+
+* streams only the current month sheet. During the first 7 days of a month
+  it also reads the previous month, because the 1 Oct file still finalised
+  `Sep.26`. The customer master (`DATA_Cocode`, 8 MB) is read only on the
+  first file of each month or with `--refresh-reference`;
+* takes the report date from the newest sales column, not the file name
+  (September files had no date in the name);
+* diffs the month against the database: inserts new rows, updates changed
+  ones, deletes rows Loxley removed (e.g. a PO moved to another SKU), and
+  logs every update or delete in `change_log`;
+* skips a file or Gmail message id that was already loaded, and any file
+  older than the newest loaded report (`--force` overrides). Even a forced
+  older file never deletes data dated after its own report date;
+* refuses to delete more than 20% of a month's rows (a sign of a broken
+  file) unless `--allow-mass-delete` is given;
+* records warnings in `ingest_log.warnings`:
+  * a repeated or out-of-order date label, fixed from the row-3 "time gone"
+    formula where possible, otherwise the column is skipped;
+  * SKU rows not adding up to the Total row;
+  * a sharp MTD drop;
+  * the file name or subject date not matching the data.
+
+Measured on the real 19–22 Oct files: **0.6–0.8 s and about 95 row writes per
+day**, versus 4.5 s and about 2,300 upserts before. Loading the files day by
+day gives exactly the same tables as one full load of the latest file.
 
 ## Usage
 
@@ -71,8 +99,7 @@ pip install -r requirements.txt
 # one-off: backfill all history (Sep 2023 → today) from any recent workbook
 python loxley_sales_parser.py ingest "Green Nut Daily Stock 2026 22.10.26.xlsx" --all-sheets
 
-# daily: reloads the current month + previous month (so the 1st-of-month email
-# still finalises last month)
+# daily: incremental load of one email attachment
 python loxley_sales_parser.py ingest "Green Nut Daily Stock 2026 23.10.26.xlsx" \
     --message-id 1a1615e08f1d26fa --subject "Green Nut Daily Sales & Stock as of 23 Oct 2026"
 
@@ -95,9 +122,11 @@ A scheduled Claude task would do the following on each run:
    `from:loxtrade.com subject:"Green Nut Daily" has:attachment newer_than:3d`.
    The subject varies ("Sales & Stock" / "Sales&Stock") and the attachment
    name sometimes has no date, so don't match on either.
-2. Skip message ids already in `ingest_log.email_message_id`.
-3. Download the `.xlsx` attachment and run
+2. Skip message ids already in `ingest_log.email_message_id`. The script
+   also skips them itself.
+3. Download each `.xlsx` attachment, **oldest email first**, and run
    `python loxley_sales_parser.py ingest <file> --message-id <id> --subject "<subject>"`.
+4. Report anything in the output's `warnings` list.
 
 Cloud sessions are ephemeral, so a scheduled run must write to a persistent
 PostgreSQL database (set `LOXLEY_DB_URL`). A SQLite file inside the container
