@@ -1,0 +1,7 @@
+# Loxley data: never commit raw workbooks or local databases
+*.xlsx
+*.xls
+*.db
+*.db-journal
+__pycache__/
+.pytest_cache/

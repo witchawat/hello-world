@@ -1,0 +1,5 @@
+openpyxl>=3.1
+# optional, only for PostgreSQL / Supabase:
+# psycopg[binary]>=3.1
+# tests:
+# pytest
